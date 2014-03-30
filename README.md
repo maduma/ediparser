@@ -14,7 +14,8 @@ Run
 - EDIFACT is read from stdin
 
     gzcat UAT.NGI.BIF.INV.D140319.T130007.AMA.LGL.FTP.DATA.gz | \  
-    scala edifactdbloader.parser.EDIParser edimappingconfig.xml
+    scala edifactdbloader.parser.EDIParser edimappingconfig.xml > \
+    result.xml
 
 # options
 - -Ddebug=true

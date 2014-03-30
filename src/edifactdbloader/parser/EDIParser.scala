@@ -39,10 +39,11 @@ class EDIRuleSeg(node: Node) {
 
 class EDIRuleSegGroup(node: Node, id: Int) {
   val code = "GROUP" + id
-  val tag = code
+  val tag = (node \ ("@" + tagAtt)).text
   val min = (node \ ("@" + minAtt)).text.toInt
   val max = (node \ ("@" + maxAtt)).text.toInt
 
+  if (!tag.matches("[\\w-]+")) throw new Exception("Not a valid tag")
   if (min < 0 || max < 0) new Exception("min or max < 0")
   if (min > max) throw new Exception("min > max")
   if (min > 1) throw new Exception("min > 1 not implemented")
@@ -64,6 +65,12 @@ class EDIRuleField(node: Node) extends EDIRuleComponent(node) {
   var minComponent = 0
   (node \ componentTag).foreach(n => { if (n.attributes(requiredAtt).text == "true") minComponent += 1 })
   override def toString = if (printField) Array(tag, required, minComponent, maxComponent).mkString(":") else ""
+}
+
+class Result(tag: String, value: String = "", child: Array[Result] = Array()) {
+  override def toString =
+    if (child.length == 0) "<" + tag + ">" + value + "</" + tag + ">"
+    else "<" + tag + ">" + child.mkString("") + "</" + tag + ">"
 }
 
 class EDIParser {
@@ -88,14 +95,15 @@ class EDIParser {
     rootRule
   }
 
-  def parseComponent(comp: String, rTree: ETree) = rTree.data match {
+  def parseComponent(comp: String, rTree: ETree): Result = rTree.data match {
     case r: EDIRuleComponent => {
       printlnDebug(r.tag + " -> " + comp)
+      new Result(r.tag, comp)
     }
     case _ => throw new Exception("Cannot get component tag")
   }
 
-  def parseField(field: String, rTree: ETree) = rTree.data match {
+  def parseField(field: String, rTree: ETree): Result = rTree.data match {
     case r: EDIRuleField => {
       val comps = field.split(cSep)
       printlnDebug("- cols: " + comps.length + " " + r.minComponent + ":" + r.maxComponent + ", " + r.tag)
@@ -104,19 +112,21 @@ class EDIParser {
       if (comps.length > r.maxComponent) throw new Exception("too many Components")
 
       var rule = rTree.child
+      var results = Array[Result]()
       comps.foreach(comp => {
-        if (comp != "") parseComponent(comp, rule)
+        if (comp != "") results = results :+ parseComponent(comp, rule)
         else rule.data match {
           case r: EDIRuleComponent => printlnDebug(r.tag + " -|")
           case _                   => throw new Exception("Cannot get component tag")
         }
         rule = rule.sibling
       })
+      new Result(r.tag, child = results)
     }
     case _ => throw new Exception("Cannot get minComponents")
   }
 
-  def parseSeg(seg: EDISeg, rTree: ETree) = rTree.data match {
+  def parseSeg(seg: EDISeg, rTree: ETree): Result = rTree.data match {
     case r: EDIRuleSeg =>
       {
         printlnDebug("- flds: " + seg.fields.length)
@@ -126,36 +136,42 @@ class EDIParser {
 
         var rule = rTree.child
         var index = 0
+        var results = Array[Result]()
         seg.fields.foreach(field => {
           printlnDebug("[" + index + "]")
-          if (field.contains(cSep)) parseField(field, rule)
+          if (field.contains(cSep)) results = results :+ parseField(field, rule)
           else {
             val tag = rule.data match {
               case rf: EDIRuleField => rf.tag
               case _                => throw new Exception("Cannot get Field Tag")
             }
-            if (field != "") printlnDebug("- cols: 1, " + tag + " -> " + field)
-            else printlnDebug("- cols: 0, " + tag + " -|")
+            if (field != "") {
+              results = results :+ new Result(tag, field)
+              printlnDebug("- cols: 1, " + tag + " -> " + field)
+            } else printlnDebug("- cols: 0, " + tag + " -|")
           }
           index += 1
           rule = rule.sibling
         })
+        new Result(r.tag, child = results)
       }
     case _ => throw new Exception("Cannot get minField")
   }
 
-  def parseMsg(msg: EDIMsg, rTree: ETree = rootRule) = {
-    parseMsgImp(msg, rTree)
+  def parseMsg(msg: EDIMsg, rTree: ETree = rootRule): Result = {
+    val results = parseMsgImp(msg, rTree)
     if (!Array("UNB", "UNZ", "UNT").contains(msg.last.code)) throw new Exception("last seg is not UNB,UNZ or UNT")
     printlnDebug("#" * 80)
+    if (results.length == 0) new Result("MESSAGE", msg.toString)
+    else if (results.length == 1) results.last
+    else throw new Exception("More than one result in results array")
   }
 
-  def parseMsgImp(msg: EDIMsg, rTree: ETree = rootRule, rep: Array[Int] = Array.fill(rootRule.id + 1)(0)): Unit = {
+  def parseMsgImp(msg: EDIMsg, rTree: ETree = rootRule, rep: Array[Int] = Array.fill(rootRule.id + 1)(0), results: Array[Result] = Array()): Array[Result] = {
     if (msg.hasNext && rTree != ETerm) {
       var seg = msg.seg
-
-      def parseAndNextSeg = { printlnDebug(seg.code); parseSeg(seg, rTree); msg.incSeg }
-      def nextRuleOrAgain(max: Int) = if (rep(rTree.id) == max) { rstRule; parseMsgImp(msg, rTree.sibling, rep) } else parseMsgImp(msg, rTree, rep)
+      def parseAndNextSeg = { printlnDebug(seg.code); val result = parseSeg(seg, rTree); msg.incSeg; result }
+      def nextRuleOrAgain(max: Int) = if (rep(rTree.id) == max) { rstRule; parseMsgImp(msg, rTree.sibling, rep, results) } else parseMsgImp(msg, rTree, rep, results)
       def incRule = rep(rTree.id) += 1
       def rstRule = rep(rTree.id) = 0
       def nextRule = {
@@ -172,27 +188,27 @@ class EDIParser {
         printlnDebug("-  seg: " + seg)
         printlnDebug("- rule: " + rTree.data.getClass.getSimpleName + ", " + rTree.data + ", id" + rTree.id + ":" + rep(rTree.id))
         rTree.data match {
-          case r: EDIRule => { parseMsgImp(msg, rTree.child, rep) }
+          case r: EDIRule => { Array(new Result("MESSAGE", child = parseMsgImp(msg, rTree.child, rep, results))) }
           case r: EDIRuleSeg =>
             if (rep(rTree.id) < r.min) {
-              if (seg.code == r.code) { parseAndNextSeg; incRule; nextRuleOrAgain(r.max) }
+              if (seg.code == r.code) { val segResult = parseAndNextSeg; incRule; segResult +: nextRuleOrAgain(r.max) }
               else throw new Exception("parse msg error " + r.code + " code not found")
             } else {
-              if (seg.code == r.code) { parseAndNextSeg; incRule; nextRuleOrAgain(r.max) }
-              else { rstRule; parseMsgImp(msg, rTree.sibling, rep) }
+              if (seg.code == r.code) { val segResult = parseAndNextSeg; incRule; segResult +: nextRuleOrAgain(r.max) }
+              else { rstRule; parseMsgImp(msg, rTree.sibling, rep, results) }
             }
           case r: EDIRuleSegGroup =>
-            if (rep(rTree.id) < r.min) { incRule; parseMsgImp(msg, rTree.child, rep); nextRuleOrAgain(r.max) }
+            if (rep(rTree.id) < r.min) { incRule; val childResult = parseMsgImp(msg, rTree.child, rep, results); new Result(r.tag, child = childResult) +: nextRuleOrAgain(r.max) }
             else {
-              if (seg.code == nextRule) { incRule; parseMsgImp(msg, rTree.child, rep); nextRuleOrAgain(r.max) }
-              else { rstRule; parseMsgImp(msg, rTree.sibling, rep) }
+              if (seg.code == nextRule) { incRule; val childResult = parseMsgImp(msg, rTree.child, rep, results); new Result(r.tag, child = childResult) +: nextRuleOrAgain(r.max) }
+              else { rstRule; parseMsgImp(msg, rTree.sibling, rep, results) }
             }
-          case r: EDIRuleField     => {}
-          case r: EDIRuleComponent => {}
+          case r: EDIRuleField     => results
+          case r: EDIRuleComponent => results
           case _                   => throw new Exception("bad rule type")
         }
-      }
-    }
+      } else results
+    } else results
   }
 }
 
@@ -276,12 +292,15 @@ class EDIMsg(segs: Array[EDISeg] = Array(), raw: String = "") {
   def length = segs.length
 
   def toStringNoCksum = segs.mkString(sSep.toString)
-  override def toString = "" +
+  def toStringUUID = "" +
     "=============================================================\n" +
     "cksum: " + uuid + "\n" +
     "-------------------------------------------------------------\n" +
     segs.mkString(sSep.toString)
+  override def toString = segs.mkString(sSep.toString)
 }
+
+class EDIEndMsg extends EDIMsg
 
 class EDICksum extends Iterator[String] {
   private var index = 0
@@ -321,7 +340,7 @@ object EDIParser {
   val fSep = '\35'
   val cSep = '\37'
 
-  var debug = true
+  var debug = false
   val printField = true
 
   val messageDigest = MessageDigest.getInstance("MD5")
@@ -344,15 +363,24 @@ object EDIParser {
     //println(rule)
     //System.exit(0)
 
-    val cksumFileName = System.getProperty("cksumFile")
     debug = (System.getProperty("debug") == "true")
     if (debug) System.err.println("Debug enabled.")
-    val cksum = new EDICksum().load(Source.fromFile(cksumFileName).getLines)
     val doChecksum = (System.getProperty("doCksum") == "true")
-    if (doChecksum) System.err.println("cksum enabled.")
-    val msgIt = new EDIMsgIterator(new EDIRawSegIterator(Source.stdin), cksum, doChecksum)
-    //val msgIt = new EDIMsgIterator(new EDIRawSegIterator(Source.stdin))
-    msgIt.foreach(msg => parser.parseMsg(msg, rule))
+
+    val msgIt = {
+      if (doChecksum) {
+        System.err.println("cksum enabled.")
+        val cksumFileName = System.getProperty("cksumFile")
+        val cksum = new EDICksum().load(Source.fromFile(cksumFileName).getLines)
+        new EDIMsgIterator(new EDIRawSegIterator(Source.stdin), cksum, doChecksum)
+      } else new EDIMsgIterator(new EDIRawSegIterator(Source.stdin))
+    }
+    println("<RESULT>")
+    msgIt.foreach(msg => {
+      val result = parser.parseMsg(msg)
+      println(result)
+    })
+    println("</RESULT>")
 
     System.err.println(msgIt.msgNbr + " messages.")
     if (doChecksum) System.err.println(msgIt.newMsgNbr + " new messages.")
