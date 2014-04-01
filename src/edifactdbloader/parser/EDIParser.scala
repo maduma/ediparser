@@ -247,11 +247,11 @@ class EDIMsgIterator(it: EDIRawSegIterator, cksum: EDICksum = new EDICksum, only
       isFirst = true
       new EDIMsg(Array(new EDISeg(code, parts._2)), rawSeg)
     } else if (code == "UNH" && !isFirst) {
-      val sb = new StringBuilder(rawSeg)
+      //val sb = new StringBuilder(rawSeg)
       var segs = Array(new EDISeg(code, parts._2))
       while (it.hasNext && {
         val rawSeg = it.next
-        sb.append(rawSeg)
+        //sb.append(rawSeg)
         parts = rawSeg.split(fSep).splitAt(1)
         code = parts._1(0)
         code
@@ -260,7 +260,8 @@ class EDIMsgIterator(it: EDIRawSegIterator, cksum: EDICksum = new EDICksum, only
         segs = segs :+ new EDISeg(code, parts._2)
       }
       segs = segs :+ new EDISeg(code, parts._2)
-      new EDIMsg(segs, sb.toString)
+      //new EDIMsg(segs, sb.toString)
+      new EDIMsg(segs, "")
     } else throw new Exception("parsing failed")
   }
 }
@@ -281,7 +282,7 @@ class EDISeg(val code: String = "", val fields: Array[String] = Array()) {
 }
 
 class EDIMsg(segs: Array[EDISeg] = Array(), raw: String = "") {
-  val uuid = md5(raw) + raw.size
+  val uuid = "" //md5(raw) + raw.size
   private var index = 0
 
   def seg = segs(index)
@@ -375,12 +376,12 @@ object EDIParser {
         new EDIMsgIterator(new EDIRawSegIterator(Source.stdin), cksum, doChecksum)
       } else new EDIMsgIterator(new EDIRawSegIterator(Source.stdin))
     }
-    println("<RESULT>")
+    //println("<RESULT>")
     msgIt.foreach(msg => {
       val result = parser.parseMsg(msg)
       println(result)
     })
-    println("</RESULT>")
+    //println("</RESULT>")
 
     System.err.println(msgIt.msgNbr + " messages.")
     if (doChecksum) System.err.println(msgIt.newMsgNbr + " new messages.")
