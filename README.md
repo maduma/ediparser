@@ -1,4 +1,4 @@
-EDIFACT file parser writen in Scala
+EDIFACT file parser written in Scala
 ===================================
 
 Compilation
